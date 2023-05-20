@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fast-xml-parser/4.2.0/fxparser.min.js"
+        integrity="sha512-zWNEvym0cj0ylPHBaQzsqRAqzoU8yLHjAo/XvjSrO2W5Y56UsqEcJUSanEb0bQtjYAT1ppbl/4fmYisrQmCEVw=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="script.js" async defer></script>
+</head>
+
+<body>
+    <main>
+        <div id="head_card">
+            <h1>Save Papers</h1>
+        </div>
+        <br>
+        <hr>
+        <div class="input_container">
+            <input id="input_box" type="link" placeholder="https://arxiv.org/abs/1706.03762"></input>
+            <button id="new_link">ADD NEW</button>
+        </div>
+        <div id="paper-container">
+            <div class="paper-block">
+                <div class="paper-card accordion">
+                    <div>
+                        <h3 class="paper-title">This is title</h3>
+                        <a class="paper-link" href="https://google.com">https://google.com</a>
+                    </div>
+                </div>
+                <div class="paper-abstract panel">
+                    <p>Here comes abstract</p>
+                    <button onclick="removePaper('paper_id')">DELETE</button>
+                    <hr>
+                </div>
+
+            </div>
+        </div>
+
+        <footer><p>Made with 💖</p><p>&copy; 2023<script>if(new Date().getFullYear() != 2023) document.write(" - " + new Date().getFullYear())</script><a href="https://github.com/crossphoton">crossphoton</a></p></footer>
+    </main>
+</body>
+
+</html>
