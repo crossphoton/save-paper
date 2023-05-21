@@ -33,7 +33,6 @@ function filterPaperData(data, /** @type {String} */ link, id) {
 }
 
 function parse(/** @type {String} */ url) {
-  if (!url.includes("arxiv.org")) return;
   const url_split = url.split("/");
 
   let final_id = "";
