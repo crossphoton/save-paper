@@ -48,6 +48,15 @@ button {
   max-width: fit-content;
 }
 
+#link-container {
+  display: flex;
+  flex-direction: column;
+}
+
+#link-container > * {
+  margin: 0;
+}
+
 #head_card {
   background-color: #c9ddff;
   padding: 50px;

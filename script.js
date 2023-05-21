@@ -1,10 +1,12 @@
 const new_link_button = document.getElementById("new_link");
 const link_input_box = document.getElementById("input_box");
 const paperContainer = document.getElementById("paper-container");
+const linkContainer = document.getElementById("link-container");
 
 const parser = new XMLParser();
 
-const LOCALSTORAGE_KEY = "data";
+const PAPER_LOCALSTORAGE_KEY = "data";
+const LINK_LOCALSTORAGE_KEY = "data_links";
 
 class Result {
   link = undefined;
@@ -19,15 +21,19 @@ class Result {
 }
 
 /** @type {[Result]} */ let global_data =
-  JSON.parse(localStorage.getItem(LOCALSTORAGE_KEY)) || [];
+  JSON.parse(localStorage.getItem(PAPER_LOCALSTORAGE_KEY)) || [];
 
-function filterData(data, /** @type {String} */ link, id) {
+/** @type {[String]} */ let global_link_data =
+  JSON.parse(localStorage.getItem(LINK_LOCALSTORAGE_KEY)) || [];
+
+function filterPaperData(data, /** @type {String} */ link, id) {
   if (!data || !data.feed || !data.feed.id) return null;
 
   return new Result(link, data.feed.entry, id);
 }
 
-async function getLinkResult(/** @type {String} */ url) {
+function parse(/** @type {String} */ url) {
+  if (!url.includes("arxiv.org")) return;
   const url_split = url.split("/");
 
   let final_id = "";
@@ -35,8 +41,17 @@ async function getLinkResult(/** @type {String} */ url) {
 
   if (final_id.includes("pdf")) final_id.replace(".pdf", "");
 
-  if (!final_id || final_id.split(".").length != 2) {
-    alert("Some error occured!");
+  if (!final_id || final_id.split(".").length != 2) return;
+
+  return final_id;
+}
+
+async function getLinkResult(/** @type {String} */ url) {
+  const final_id = parse(url);
+
+  if (!final_id) {
+    global_link_data.push(url);
+    renderLinks();
     return;
   }
 
@@ -44,7 +59,7 @@ async function getLinkResult(/** @type {String} */ url) {
     `https://export.arxiv.org/api/query?id_list=${final_id}`
   )
     .then((data) => data.text())
-    .then((data) => filterData(parser.parse(data), url, final_id))
+    .then((data) => filterPaperData(parser.parse(data), url, final_id))
     .catch((err) => {
       console.error(err);
       alert("Some error occured!");
@@ -52,7 +67,7 @@ async function getLinkResult(/** @type {String} */ url) {
     });
 
   if (!result || !global_data.map((a) => a.id).includes(result.id))
-    global_data.push(result), render();
+    global_data.push(result), renderPapers();
 }
 
 new_link_button.addEventListener("click", (e) => {
@@ -68,7 +83,7 @@ new_link_button.addEventListener("click", (e) => {
     new URL(link);
     getLinkResult(link);
   } catch (error) {
-    if(link.split(".").length == 2 && link.split('/').length == 1)
+    if (link.split(".").length == 2 && link.split("/").length == 1)
       return getLinkResult(link);
     alert("Not a valid/supported URL");
   }
@@ -76,7 +91,7 @@ new_link_button.addEventListener("click", (e) => {
   link_input_box.value = "";
 });
 
-function getBlockHTML(/** @type {Result} */ result) {
+function getPaperBlockHTML(/** @type {Result} */ result) {
   return `
 </div><div class="paper-block">
     <div class="paper-card accordion">
@@ -94,26 +109,53 @@ function getBlockHTML(/** @type {Result} */ result) {
 `;
 }
 
-function render() {
+function getLinkHTML(/** @type {String} */ link) {
+  return `
+<div>
+<a href="${link}" class="link">${
+    link.length > 50 ? link.slice(0, 49) + "..." : link
+  }</a>
+<button onclick="removeLink('${link}')">X</button>
+</div>
+`;
+}
+
+function renderPapers() {
+  // Render papers
   if (global_data.length == 0) {
     paperContainer.innerHTML = "<h2>Let's get going</h2>";
     return;
   }
 
-  localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(global_data));
+  localStorage.setItem(PAPER_LOCALSTORAGE_KEY, JSON.stringify(global_data));
 
-  let html = global_data.map((val) => getBlockHTML(val));
-
+  let html = global_data.map((val) => getPaperBlockHTML(val));
   html = html.join("\n");
-
   paperContainer.innerHTML = html;
 
+  // Adding accordion ev lis...
   var acc = document.getElementsByClassName("accordion");
-  var i;
-
-  for (i = 0; i < acc.length; i++) {
+  for (let i = 0; i < acc.length; i++) {
     acc[i].addEventListener("click", paperCardClick);
   }
+}
+
+function renderLinks() {
+  if (global_link_data.length == 0) {
+    linkContainer.innerHTML = "<h4>Nothing's here...</h4>";
+    return;
+  }
+
+  localStorage.setItem(LINK_LOCALSTORAGE_KEY, JSON.stringify(global_link_data));
+
+  html = global_link_data.map((val) => getLinkHTML(val));
+  html = html.join("\n");
+  linkContainer.innerHTML = html;
+}
+
+function render() {
+  renderPapers();
+  renderLinks();
 }
 
 function paperCardClick() {
@@ -128,7 +170,8 @@ function paperCardClick() {
 
 function removePaper(paper_id) {
   global_data = global_data.filter((val) => val.id != paper_id);
-  render();
+  if (!global_data.length) localStorage.removeItem(PAPER_LOCALSTORAGE_KEY);
+  renderPapers();
 }
 
 function download(filename, text) {
@@ -148,7 +191,11 @@ function download(filename, text) {
 }
 
 function export_data() {
-  if (global_data.length) download("export.json", JSON.stringify(global_data));
+  if (global_data.length || global_link_data.length)
+    download(
+      "export.json",
+      JSON.stringify({ papers: global_data, links: global_link_data })
+    );
   else {
     alert("No data available to export!");
     return;
@@ -156,8 +203,10 @@ function export_data() {
 }
 
 function clear_data() {
-  localStorage.removeItem(LOCALSTORAGE_KEY);
+  localStorage.removeItem(PAPER_LOCALSTORAGE_KEY);
   global_data = [];
+  localStorage.removeItem(LINK_LOCALSTORAGE_KEY);
+  global_link_data = [];
   render();
 }
 
@@ -165,18 +214,30 @@ function import_data() {
   const data = prompt("Paste the exported data");
   try {
     let new_data = JSON.parse(data);
-    new_data = new_data.filter(
+    new_paper_data = new_data.papers.filter(
       (val) => !global_data.map((val) => val.id).includes(val.id)
     );
 
+    if (new_paper_data) {
+      for (let i of new_paper_data) global_data.push(i);
+      renderPapers();
+    }
+    new_data = new_data.links.filter((val) => !global_link_data.includes(val));
+
     if (new_data) {
-      for (let i of new_data) global_data.push(i);
-      render();
+      for (let i of new_data) global_link_data.push(i);
+      renderLinks();
     }
   } catch (error) {
     console.error(error);
     alert("Error occured while importing!");
   }
+}
+
+function removeLink(link) {
+  global_link_data = global_link_data.filter((val) => val != link);
+  if (!global_link_data.length) localStorage.removeItem(LINK_LOCALSTORAGE_KEY);
+  renderLinks();
 }
 
 render();
