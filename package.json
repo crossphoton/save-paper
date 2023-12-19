@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "dependencies": {
+    "@types/node": "^20.10.5",
+    "@vercel/kv": "^1.0.1",
+    "@vercel/node": "^3.0.12"
+  }
+}

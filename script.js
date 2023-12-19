@@ -3,12 +3,178 @@ const link_input_box = document.getElementById("input_box");
 const paperContainer = document.getElementById("paper-container");
 const linkContainer = document.getElementById("link-container");
 
+/** utility functions */
+
+function download(filename, text) {
+  var element = document.createElement("a");
+  element.setAttribute(
+    "href",
+    "data:text/plain;charset=utf-8," + encodeURIComponent(text)
+  );
+  element.setAttribute("download", filename);
+
+  element.style.display = "none";
+  document.body.appendChild(element);
+
+  element.click();
+
+  document.body.removeChild(element);
+}
+
+class DataStore {
+  getData() {
+    throw Error("method getData should be implemented");
+  }
+
+  updateData(data) {
+    throw Error("method getData should be implemented");
+  }
+}
+
+class LocalStore extends DataStore {
+  key = "data";
+
+  constructor(key) {
+    this.key = key;
+  }
+
+  getData() {
+    return JSON.parse(localStorage.getItem(this.key));
+  }
+
+  updateData(data) {
+    localStorage.setItem(JSON.stringify(data));
+  }
+
+  removeKey() {
+    localStorage.removeItem(this.key);
+  }
+}
+
+class RemoteStore extends DataStore {
+  remoteKey = null;
+
+  constructor(id) {
+    this.remoteKey = id;
+  }
+
+  async getData() {
+    const data = (await fetch("/api/data?id=" + this.remoteKey)).json();
+    return data;
+  }
+
+  async updateData(data) {
+    return fetch("/api/data?id=" + this.remoteKey, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+}
+
+class LocalDataManager {
+  update = () => {};
+
+  constructor(onUpdate) {
+    this.paperStore = new LocalStore("data");
+    this.linkStore = new LocalStore("data_links");
+    if (onUpdate) this.update = onUpdate;
+  }
+
+  async addPaper(id) {
+    const result = await fetch(
+      `https://export.arxiv.org/api/query?id_list=${id}`
+    )
+      .then((data) => data.text())
+      .then((data) => filterPaperData(parser.parse(data), url, id))
+      .catch((err) => {
+        console.error(err);
+        alert("Some error occured!");
+        return;
+      });
+
+    if (!result || !global_data.map((a) => a.id).includes(result.id))
+      global_data.push(result), this.update();
+  }
+
+  removePaper(paper_id) {
+    let data = this.paperStore.getData();
+
+    data = data.filter((val) => val.id != paper_id);
+    if (!data.length) this.paperStore.removeKey();
+
+    this.update();
+  }
+
+  addLink(link) {
+    let data = this.linkStore.getData();
+
+    if (data.findIndex(link) === -1)
+      data.push(link), this.linkStore.updateData(data), this.update();
+  }
+
+  removeLink(link) {
+    let data = this.linkStore.getData();
+
+    data = data.filter((val) => val != link);
+    if (!data.length) this.linkStore.removeKey();
+
+    this.linkStore.updateData(data);
+  }
+
+  clearData() {
+    this.paperStore.removeKey();
+    this.linkStore.removeKey();
+
+    this.update();
+  }
+
+  getAllData() {
+    return {
+      papers: this.paperStore.getData(),
+      links: this.linkStore.getData(),
+    };
+  }
+
+  exportData() {
+    if (this.paperStore.getData() || this.linkStore.getData())
+      download("export.json", JSON.stringify(this.getAllData()));
+    else {
+      alert("No data available to export!");
+      return;
+    }
+  }
+
+  importData() {
+    const data = prompt("Paste the exported data");
+    try {
+      let new_data = JSON.parse(data);
+      new_paper_data = new_data.papers.filter(
+        (val) => !this.getAllData().papers.map((val) => val.id).includes(val.id)
+      );
+  
+      if (new_paper_data) {
+        for (let i of new_paper_data) global_data.push(i);
+        renderPapers();
+      }
+      new_data = new_data.links.filter((val) => !global_link_data.includes(val));
+  
+      if (new_data) {
+        for (let i of new_data) global_link_data.push(i);
+        renderLinks();
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Error occured while importing!");
+    }
+  }
+}
+
 const parser = new XMLParser();
 
 const PAPER_LOCALSTORAGE_KEY = "data";
 const LINK_LOCALSTORAGE_KEY = "data_links";
 
-class Result {
+class PaperData {
   link = undefined;
   data = undefined;
   id = undefined;
@@ -20,7 +186,7 @@ class Result {
   }
 }
 
-/** @type {[Result]} */ let global_data =
+/** @type {[PaperData]} */ let global_data =
   JSON.parse(localStorage.getItem(PAPER_LOCALSTORAGE_KEY)) || [];
 
 /** @type {[String]} */ let global_link_data =
@@ -29,7 +195,7 @@ class Result {
 function filterPaperData(data, /** @type {String} */ link, id) {
   if (!data || !data.feed || !data.feed.id) return null;
 
-  return new Result(link, data.feed.entry, id);
+  return new PaperData(link, data.feed.entry, id);
 }
 
 function parse(/** @type {String} */ url) {
@@ -69,28 +235,7 @@ async function getLinkResult(/** @type {String} */ url) {
     global_data.push(result), renderPapers();
 }
 
-new_link_button.addEventListener("click", (e) => {
-  e.preventDefault();
-
-  /** @type {String} */ const link = link_input_box.value;
-  if (!link) {
-    alert("Specify a link!");
-    return;
-  }
-
-  try {
-    new URL(link);
-    getLinkResult(link);
-  } catch (error) {
-    if (link.split(".").length == 2 && link.split("/").length == 1)
-      return getLinkResult(link);
-    alert("Not a valid/supported URL");
-  }
-
-  link_input_box.value = "";
-});
-
-function getPaperBlockHTML(/** @type {Result} */ result) {
+function getPaperBlockHTML(/** @type {PaperData} */ result) {
   return `
 </div><div class="paper-block">
     <div class="paper-card accordion">
@@ -173,22 +318,6 @@ function removePaper(paper_id) {
   renderPapers();
 }
 
-function download(filename, text) {
-  var element = document.createElement("a");
-  element.setAttribute(
-    "href",
-    "data:text/plain;charset=utf-8," + encodeURIComponent(text)
-  );
-  element.setAttribute("download", filename);
-
-  element.style.display = "none";
-  document.body.appendChild(element);
-
-  element.click();
-
-  document.body.removeChild(element);
-}
-
 function export_data() {
   if (global_data.length || global_link_data.length)
     download(
@@ -240,3 +369,24 @@ function removeLink(link) {
 }
 
 render();
+
+new_link_button.addEventListener("click", (e) => {
+  e.preventDefault();
+
+  /** @type {String} */ const link = link_input_box.value;
+  if (!link) {
+    alert("Specify a link!");
+    return;
+  }
+
+  try {
+    new URL(link);
+    getLinkResult(link);
+  } catch (error) {
+    if (link.split(".").length == 2 && link.split("/").length == 1)
+      return getLinkResult(link);
+    alert("Not a valid/supported URL");
+  }
+
+  link_input_box.value = "";
+});
