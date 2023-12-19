@@ -35,6 +35,8 @@ class LocalStore extends DataStore {
   key = "data";
 
   constructor(key) {
+    super();
+
     this.key = key;
   }
 
@@ -43,7 +45,7 @@ class LocalStore extends DataStore {
   }
 
   updateData(data) {
-    localStorage.setItem(JSON.stringify(data));
+    localStorage.setItem(this.key, JSON.stringify(data));
   }
 
   removeKey() {
@@ -52,14 +54,22 @@ class LocalStore extends DataStore {
 }
 
 class RemoteStore extends DataStore {
-  remoteKey = null;
+  constructor() {
+    super();
 
-  constructor(id) {
-    this.remoteKey = id;
+    this.remoteKeyStore = new LocalStore("remote_key");
+    let remoteKey = this.remoteKeyStore.getData();
+
+    if (remoteKey === null) {
+      remoteKey = crypto.randomUUID();
+      this.remoteKeyStore.updateData(remoteKey);
+    }
+
+    this.remoteKey = remoteKey;
   }
 
   async getData() {
-    const data = (await fetch("/api/data?id=" + this.remoteKey)).json();
+    const data = await (await fetch("/api/data?id=" + this.remoteKey)).json();
     return data;
   }
 
@@ -69,47 +79,52 @@ class RemoteStore extends DataStore {
       body: JSON.stringify(data),
     });
   }
+
+  setRemoteId(id) {
+    this.remoteKey = id;
+    this.remoteKeyStore.updateData(id);
+  }
 }
 
 class LocalDataManager {
-  update = () => {};
+  update = console.log;
+  arxivUtility = new ArxivUtility();
 
   constructor(onUpdate) {
-    this.paperStore = new LocalStore("data");
+    this.paperStore = new LocalStore("data_paper");
     this.linkStore = new LocalStore("data_links");
+
     if (onUpdate) this.update = onUpdate;
   }
 
-  async addPaper(id) {
-    const result = await fetch(
-      `https://export.arxiv.org/api/query?id_list=${id}`
-    )
-      .then((data) => data.text())
-      .then((data) => filterPaperData(parser.parse(data), url, id))
-      .catch((err) => {
-        console.error(err);
-        alert("Some error occured!");
-        return;
-      });
+  async addPaper(/** @type {string} */ id) {
+    const result = await this.arxivUtility.fetchPaperData(id);
 
-    if (!result || !global_data.map((a) => a.id).includes(result.id))
-      global_data.push(result), this.update();
+    const paperData = this.paperStore.getData() || [];
+
+    if (!result || !paperData.map((a) => a.id).includes(result.id))
+      paperData.push(result),
+        this.paperStore.updateData(paperData),
+        this.update("add paper - " + result.id, this.getAllData());
   }
 
-  removePaper(paper_id) {
+  removePaper(id) {
     let data = this.paperStore.getData();
 
-    data = data.filter((val) => val.id != paper_id);
+    data = data.filter((val) => val.id != id);
     if (!data.length) this.paperStore.removeKey();
+    else this.paperStore.updateData(data);
 
-    this.update();
+    this.update("remove paper - " + id, this.getAllData());
   }
 
   addLink(link) {
-    let data = this.linkStore.getData();
+    let data = this.linkStore.getData() || [];
 
-    if (data.findIndex(link) === -1)
-      data.push(link), this.linkStore.updateData(data), this.update();
+    if (data.indexOf(link) === -1)
+      data.push(link),
+        this.linkStore.updateData(data),
+        this.update("add link - " + link, this.getAllData());
   }
 
   removeLink(link) {
@@ -119,19 +134,20 @@ class LocalDataManager {
     if (!data.length) this.linkStore.removeKey();
 
     this.linkStore.updateData(data);
+    this.update("remove link - " + link, this.getAllData());
   }
 
   clearData() {
     this.paperStore.removeKey();
     this.linkStore.removeKey();
 
-    this.update();
+    this.update("remove all", this.getAllData());
   }
 
   getAllData() {
     return {
-      papers: this.paperStore.getData(),
-      links: this.linkStore.getData(),
+      papers: this.paperStore.getData() || [],
+      links: this.linkStore.getData() || [],
     };
   }
 
@@ -144,28 +160,138 @@ class LocalDataManager {
     }
   }
 
-  importData() {
-    const data = prompt("Paste the exported data");
+  importData(data) {
+    if (!data) data = prompt("Paste the exported data");
     try {
+      let { links, papers } = this.getAllData();
       let new_data = JSON.parse(data);
-      new_paper_data = new_data.papers.filter(
-        (val) => !this.getAllData().papers.map((val) => val.id).includes(val.id)
+      let new_paper_data = new_data.papers.filter(
+        (val) => !papers.map((val) => val.id).includes(val.id)
       );
-  
+
       if (new_paper_data) {
-        for (let i of new_paper_data) global_data.push(i);
-        renderPapers();
+        for (let i of new_paper_data) {
+          papers.push(i);
+        }
+        this.paperStore.updateData(papers);
       }
-      new_data = new_data.links.filter((val) => !global_link_data.includes(val));
-  
+
+      new_data = new_data.links.filter((val) => !links.includes(val));
+
       if (new_data) {
-        for (let i of new_data) global_link_data.push(i);
-        renderLinks();
+        for (let i of new_data) {
+          links.push(i);
+        }
+
+        this.linkStore.updateData(links);
+        this.update("add all", this.getAllData());
       }
     } catch (error) {
       console.error(error);
-      alert("Error occured while importing!");
+      throw new Error("Error occured while importing!");
     }
+  }
+}
+
+class ArxivUtility {
+  parser = new XMLParser();
+
+  #filterPaperData(xmlData, id) {
+    const data = this.parser.parse(xmlData);
+
+    if (!data || !data.feed || !data.feed.id)
+      throw new Error("invalid data received");
+
+    return new PaperData(data.feed.entry.id, data.feed.entry, id);
+  }
+
+  async fetchPaperData(id) {
+    const response = await fetch(
+      `https://export.arxiv.org/api/query?id_list=${id}`
+    );
+    if (response.status !== 200) {
+      throw new Error("invalid response from Arxiv");
+    }
+    const data = await response.text();
+    const paper = this.#filterPaperData(data, id);
+
+    return paper;
+  }
+}
+
+class Renderer {
+  #getPaperBlockHTML(/** @type {PaperData} */ result) {
+    return `
+</div><div class="paper-block">
+    <div class="paper-card accordion">
+        <div>
+            <h3 class="paper-title">${result.data.title}</h3>
+            <a class="paper-link" href="${result.data.id}">${result.data.id}</a>
+        </div>
+    </div>
+    <div class="paper-abstract panel">
+        <p>${result.data.summary}</p>
+        <button onclick="localDataManager.removePaper('${result.id}')">DELETE</button>
+        <hr>
+    </div>
+</div>
+`;
+  }
+
+  #getLinkHTML(/** @type {String} */ link) {
+    return `
+<div>
+<a href="${link}" class="link">${
+      link.length > 50 ? link.slice(0, 49) + "..." : link
+    }</a>
+<button onclick="localDataManager.removeLink('${link}')">X</button>
+</div>
+`;
+  }
+
+  static paperCardClick() {
+    this.classList.toggle("active");
+
+    var panel = this.nextElementSibling;
+    if (panel.style.display === "block") {
+      panel.style.display = "none";
+    } else {
+      panel.style.display = "block";
+    }
+  }
+
+  #renderPapers(papers) {
+    // Render papers
+    if (papers.length == 0) {
+      paperContainer.innerHTML = "<h2>Let's get going</h2>";
+      return;
+    }
+
+    let html = papers.map((val) => this.#getPaperBlockHTML(val));
+    html = html.join("\n");
+    paperContainer.innerHTML = html;
+
+    // Adding accordion ev lis...
+    var acc = document.getElementsByClassName("accordion");
+    for (let i = 0; i < acc.length; i++) {
+      acc[i].addEventListener("click", Renderer.paperCardClick);
+    }
+  }
+
+  #renderLinks(links) {
+    if (links.length == 0) {
+      linkContainer.innerHTML = "<h4>Nothing's here...</h4>";
+      return;
+    }
+
+    let html = links.map((val) => this.#getLinkHTML(val));
+    html = html.join("\n");
+    linkContainer.innerHTML = html;
+  }
+
+  render({ papers, links }) {
+    this.#renderPapers(papers);
+    this.#renderLinks(links);
   }
 }
 
@@ -186,18 +312,6 @@ class PaperData {
   }
 }
 
-/** @type {[PaperData]} */ let global_data =
-  JSON.parse(localStorage.getItem(PAPER_LOCALSTORAGE_KEY)) || [];
-
-/** @type {[String]} */ let global_link_data =
-  JSON.parse(localStorage.getItem(LINK_LOCALSTORAGE_KEY)) || [];
-
-function filterPaperData(data, /** @type {String} */ link, id) {
-  if (!data || !data.feed || !data.feed.id) return null;
-
-  return new PaperData(link, data.feed.entry, id);
-}
-
 function parse(/** @type {String} */ url) {
   const url_split = url.split("/");
 
@@ -211,97 +325,6 @@ function parse(/** @type {String} */ url) {
   return final_id;
 }
 
-async function getLinkResult(/** @type {String} */ url) {
-  const final_id = parse(url);
-
-  if (!final_id) {
-    global_link_data.push(url);
-    renderLinks();
-    return;
-  }
-
-  const result = await fetch(
-    `https://export.arxiv.org/api/query?id_list=${final_id}`
-  )
-    .then((data) => data.text())
-    .then((data) => filterPaperData(parser.parse(data), url, final_id))
-    .catch((err) => {
-      console.error(err);
-      alert("Some error occured!");
-      return;
-    });
-
-  if (!result || !global_data.map((a) => a.id).includes(result.id))
-    global_data.push(result), renderPapers();
-}
-
-function getPaperBlockHTML(/** @type {PaperData} */ result) {
-  return `
-</div><div class="paper-block">
-    <div class="paper-card accordion">
-        <div>
-            <h3 class="paper-title">${result.data.title}</h3>
-            <a class="paper-link" href="${result.data.id}">${result.data.id}</a>
-        </div>
-    </div>
-    <div class="paper-abstract panel">
-        <p>${result.data.summary}</p>
-        <button onclick="removePaper('${result.id}')">DELETE</button>
-        <hr>
-    </div>
-</div>
-`;
-}
-
-function getLinkHTML(/** @type {String} */ link) {
-  return `
-<div>
-<a href="${link}" class="link">${
-    link.length > 50 ? link.slice(0, 49) + "..." : link
-  }</a>
-<button onclick="removeLink('${link}')">X</button>
-</div>
-`;
-}
-
-function renderPapers() {
-  // Render papers
-  if (global_data.length == 0) {
-    paperContainer.innerHTML = "<h2>Let's get going</h2>";
-    return;
-  }
-
-  localStorage.setItem(PAPER_LOCALSTORAGE_KEY, JSON.stringify(global_data));
-
-  let html = global_data.map((val) => getPaperBlockHTML(val));
-  html = html.join("\n");
-  paperContainer.innerHTML = html;
-
-  // Adding accordion ev lis...
-  var acc = document.getElementsByClassName("accordion");
-  for (let i = 0; i < acc.length; i++) {
-    acc[i].addEventListener("click", paperCardClick);
-  }
-}
-
-function renderLinks() {
-  if (global_link_data.length == 0) {
-    linkContainer.innerHTML = "<h4>Nothing's here...</h4>";
-    return;
-  }
-
-  localStorage.setItem(LINK_LOCALSTORAGE_KEY, JSON.stringify(global_link_data));
-
-  html = global_link_data.map((val) => getLinkHTML(val));
-  html = html.join("\n");
-  linkContainer.innerHTML = html;
-}
-
-function render() {
-  renderPapers();
-  renderLinks();
-}
-
 function paperCardClick() {
   this.classList.toggle("active");
   var panel = this.nextElementSibling;
@@ -312,65 +335,25 @@ function paperCardClick() {
   }
 }
 
-function removePaper(paper_id) {
-  global_data = global_data.filter((val) => val.id != paper_id);
-  if (!global_data.length) localStorage.removeItem(PAPER_LOCALSTORAGE_KEY);
-  renderPapers();
-}
+const renderer = new Renderer();
+const remoteStore = new RemoteStore();
+const localDataManager = new LocalDataManager((e, data) => {
+  renderer.render(localDataManager.getAllData());
+  remoteStore.updateData(data);
+});
 
-function export_data() {
-  if (global_data.length || global_link_data.length)
-    download(
-      "export.json",
-      JSON.stringify({ papers: global_data, links: global_link_data })
-    );
-  else {
-    alert("No data available to export!");
-    return;
-  }
-}
+remoteStore
+  .getData()
+  .then((data) => {
+    try {
+      localDataManager.importData(JSON.stringify(data));
+    } catch (error) {}
+  })
+  .catch(() => {});
 
-function clear_data() {
-  localStorage.removeItem(PAPER_LOCALSTORAGE_KEY);
-  global_data = [];
-  localStorage.removeItem(LINK_LOCALSTORAGE_KEY);
-  global_link_data = [];
-  render();
-}
+renderer.render(localDataManager.getAllData());
 
-function import_data() {
-  const data = prompt("Paste the exported data");
-  try {
-    let new_data = JSON.parse(data);
-    new_paper_data = new_data.papers.filter(
-      (val) => !global_data.map((val) => val.id).includes(val.id)
-    );
-
-    if (new_paper_data) {
-      for (let i of new_paper_data) global_data.push(i);
-      renderPapers();
-    }
-    new_data = new_data.links.filter((val) => !global_link_data.includes(val));
-
-    if (new_data) {
-      for (let i of new_data) global_link_data.push(i);
-      renderLinks();
-    }
-  } catch (error) {
-    console.error(error);
-    alert("Error occured while importing!");
-  }
-}
-
-function removeLink(link) {
-  global_link_data = global_link_data.filter((val) => val != link);
-  if (!global_link_data.length) localStorage.removeItem(LINK_LOCALSTORAGE_KEY);
-  renderLinks();
-}
-
-render();
-
-new_link_button.addEventListener("click", (e) => {
+new_link_button.addEventListener("click", async (e) => {
   e.preventDefault();
 
   /** @type {String} */ const link = link_input_box.value;
@@ -381,12 +364,45 @@ new_link_button.addEventListener("click", (e) => {
 
   try {
     new URL(link);
-    getLinkResult(link);
+    if (link.includes("arxiv")) await localDataManager.addPaper(parse(link));
+    else throw new Error("not a arxiv link");
   } catch (error) {
-    if (link.split(".").length == 2 && link.split("/").length == 1)
-      return getLinkResult(link);
-    alert("Not a valid/supported URL");
+    try {
+      new URL(link);
+      localDataManager.addLink(link);
+    } catch (error) {
+      try {
+        await localDataManager.addPaper(parse(link));
+      } catch (error) {
+        console.error(error);
+        alert("Not a valid/supported URL");
+      }
+    }
   }
 
   link_input_box.value = "";
 });
+
+function changeRemoteId() {
+  const id = prompt("Enter new id");
+  if (!id) return;
+
+  remoteStore.setRemoteId(id);
+  remoteStore.getData().then((data) => {
+    localDataManager.importData(JSON.stringify(data));
+  });
+}
+
+function getRemoteId() {
+  alert(`Use the key copied to clipboard`);
+  copyToClipboard(remoteStore.remoteKey);
+}
+
+function copyToClipboard(data) {
+  const textArea = document.createElement("textarea");
+  textArea.value = data;
+  document.body.appendChild(textArea);
+  textArea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textArea);
+}
